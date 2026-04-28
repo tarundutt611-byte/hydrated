@@ -21,7 +21,6 @@ import {
   Calendar,
   Clock,
   RefreshCw,
-  Phone,
   ArrowRight
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -37,8 +36,8 @@ import { Toaster } from '@/components/ui/sonner';
 import { toast } from 'sonner';
 import { generateHydrationNote } from '@/src/lib/gemini';
 import { format, subDays, addDays } from 'date-fns';
-import { auth, db, signInWithGoogle, logout, handleFirestoreError, OperationType, RecaptchaVerifier, signInWithPhoneNumber } from '@/src/lib/firebase';
-import { onAuthStateChanged, User, ConfirmationResult } from 'firebase/auth';
+import { auth, db, signInWithGoogle, logout, handleFirestoreError, OperationType } from '@/src/lib/firebase';
+import { onAuthStateChanged, User } from 'firebase/auth';
 import { doc, getDoc, setDoc, onSnapshot } from 'firebase/firestore';
 
 interface UserStats {
@@ -117,11 +116,6 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(true);
   const [stats, setStats] = useState<UserStats>(DEFAULT_STATS);
   const [dataLoaded, setDataLoaded] = useState(false);
-  const [phoneNumber, setPhoneNumber] = useState('');
-  const [verificationCode, setVerificationCode] = useState('');
-  const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
-  const [phoneLoading, setPhoneLoading] = useState(false);
-  const recaptchaVerifier = useRef<RecaptchaVerifier | null>(null);
 
   // Monitor Auth State
   useEffect(() => {
@@ -131,9 +125,6 @@ export default function App() {
       if (!u) {
         setStats(DEFAULT_STATS);
         setDataLoaded(false);
-        setConfirmationResult(null);
-        setVerificationCode('');
-        setPhoneNumber('');
       }
     });
     return () => unsubscribe();
@@ -189,7 +180,7 @@ export default function App() {
         const initialStats: UserStats = {
           ...DEFAULT_STATS,
           email: user.email,
-          displayName: user.displayName || user.phoneNumber,
+          displayName: user.displayName || user.email?.split('@')[0] || 'Hydro Friend',
           photoURL: user.photoURL
         };
         setDoc(userDocRef, initialStats).catch(e => handleFirestoreError(e, OperationType.WRITE, `users/${user.uid}`));
@@ -283,9 +274,6 @@ export default function App() {
 
   const logoutUser = () => {
     logout();
-    setConfirmationResult(null);
-    setVerificationCode('');
-    setPhoneNumber('');
   };
 
   const handleGoogleLogin = async () => {
@@ -297,81 +285,20 @@ export default function App() {
         return; // User cancelled, no error toast needed
       }
       console.error(error);
-      toast.error("Login failed", { description: error.message });
-    }
-  };
-
-  // Phone Auth Handlers
-  const setupRecaptcha = () => {
-    if (!recaptchaVerifier.current) {
-      recaptchaVerifier.current = new RecaptchaVerifier(auth, 'recaptcha-container', {
-        size: 'invisible',
-        callback: () => {
-          // reCAPTCHA solved, continue with phone auth
-        }
-      });
-    }
-  };
-
-  const handleSendCode = async () => {
-    if (!phoneNumber) {
-      toast.error("Please enter a phone number");
-      return;
-    }
-    
-    // Basic E.164 check: should start with + and have at least 10 digits
-    if (!phoneNumber.startsWith('+')) {
-      toast.error("Invalid format", { description: "Phone number must start with '+' and includes country code (e.g. +91...)" });
-      return;
-    }
-
-    setPhoneLoading(true);
-    try {
-      setupRecaptcha();
-      const appVerifier = recaptchaVerifier.current!;
-      const result = await signInWithPhoneNumber(auth, phoneNumber, appVerifier);
-      setConfirmationResult(result);
-      toast.success("Verification code sent!");
-    } catch (error: any) {
-      console.error("Phone Auth Error:", error);
-      if (error.code === 'auth/operation-not-allowed') {
-        toast.error("Firebase Console Setup Required", { 
-          description: "Phone Auth or your SMS Region is disabled. Go to Firebase Console > Authentication > Sign-in method > Phone to enable them.",
-          duration: 10000
+      if (error.message?.includes('offline') || error.code === 'unavailable') {
+        toast.error("Network Error", { 
+          description: "Could not reach Firebase. Check your internet or if the database is provisioned.",
+          action: {
+            label: "Help",
+            onClick: () => setShowNoteModal(true) // Misusing modal for now or create a new one
+          }
         });
-      } else if (error.code === 'auth/billing-not-enabled') {
-        toast.error("Billing Required", { 
-          description: "SMS for this region may require the Firebase Blaze (Pay-as-you-go) plan. Check your Firebase Project settings.",
-          duration: 10000
-        });
-      } else if (error.code === 'auth/invalid-phone-number') {
-        toast.error("Invalid Phone Number", { description: "Please use the full international format like +919876543210 (India)." });
-      } else if (error.code === 'auth/popup-closed-by-user') {
-         // Silently handle recaptcha modal close
       } else {
-        toast.error("Error sending code", { description: error.message });
+        toast.error("Login failed", { description: error.message });
       }
-    } finally {
-      setPhoneLoading(false);
     }
   };
 
-  const handleVerifyCode = async () => {
-    if (!verificationCode) {
-      toast.error("Please enter the code");
-      return;
-    }
-    setPhoneLoading(true);
-    try {
-      await confirmationResult!.confirm(verificationCode);
-      toast.success("Signed in successfully!");
-    } catch (error: any) {
-      console.error(error);
-      toast.error("Invalid verification code");
-    } finally {
-      setPhoneLoading(false);
-    }
-  };
   const [customAmount, setCustomAmount] = useState('250');
   const [isSyncing, setIsSyncing] = useState(false);
   const [currentView, setCurrentView] = useState<'tracker' | 'history' | 'rank' | 'schedule'>('tracker');
@@ -601,93 +528,24 @@ export default function App() {
             </div>
 
             <div className="grid gap-6">
-              {!confirmationResult ? (
-                <div className="space-y-4">
-                  <div className="space-y-2">
-                    <Label className="text-left block text-xs font-bold text-slate-400 uppercase tracking-widest pl-1">Sign in with Mobile</Label>
-                    <div className="flex gap-2">
-                      <Input 
-                        type="tel" 
-                        placeholder="+91 98765 43210"
-                        value={phoneNumber}
-                        onChange={(e) => setPhoneNumber(e.target.value)}
-                        className="h-14 rounded-2xl border-slate-200 text-lg font-bold"
-                      />
-                      <Button 
-                        onClick={handleSendCode}
-                        disabled={phoneLoading}
-                        className="h-14 w-14 rounded-2xl bg-blue-500 hover:bg-blue-600 shrink-0"
-                      >
-                        {phoneLoading ? <RefreshCw className="w-5 h-5 animate-spin" /> : <ArrowRight className="w-5 h-5" />}
-                      </Button>
-                    </div>
-                    <p className="text-[10px] text-slate-400 pl-1 font-medium">
-                      Use international format (e.g., +91 for India). <br />
-                      <span className="text-blue-400 cursor-help" onClick={() => toast.info("Firebase Action Required", { 
-                        description: "1. Create a Firestore database in your console. 2. Enable 'Phone' auth. 3. Allow your SMS Region.",
-                        duration: 8000
-                      })}>
-                        Can't sign in or database offline?
-                      </span>
-                    </p>
-                  </div>
-
-                  <div className="relative">
-                    <div className="absolute inset-0 flex items-center"><span className="w-full border-t border-slate-100"></span></div>
-                    <div className="relative flex justify-center text-xs uppercase"><span className="bg-white px-2 text-slate-300 font-bold">Or continue with</span></div>
-                  </div>
-
-                  <Button 
-                    onClick={handleGoogleLogin}
-                    className="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold h-14 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-3 underline-offset-4"
-                  >
-                    <svg className="w-5 h-5" viewBox="0 0 24 24">
-                      <path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-                      <path fill="currentColor" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-                      <path fill="currentColor" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
-                      <path fill="currentColor" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
-                    </svg>
-                    Google Account
-                  </Button>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  <div className="space-y-2">
-                    <Label className="text-left block text-xs font-bold text-blue-500 uppercase tracking-widest pl-1">Enter Verification Code</Label>
-                    <Input 
-                      type="text" 
-                      placeholder="6-digit code"
-                      value={verificationCode}
-                      onChange={(e) => setVerificationCode(e.target.value)}
-                      className="h-14 rounded-2xl border-blue-200 text-center text-2xl font-black tracking-widest"
-                      maxLength={6}
-                    />
-                  </div>
-                  <Button 
-                    onClick={handleVerifyCode}
-                    disabled={phoneLoading}
-                    className="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold h-14 rounded-2xl shadow-lg shadow-blue-100"
-                  >
-                    {phoneLoading ? <RefreshCw className="w-5 h-5 animate-spin mr-2" /> : null}
-                    Verify and Continue
-                  </Button>
-                  <Button 
-                    variant="ghost" 
-                    onClick={() => setConfirmationResult(null)}
-                    className="text-slate-400 font-bold"
-                  >
-                    Back to login
-                  </Button>
-                </div>
-              )}
+              <Button 
+                onClick={handleGoogleLogin}
+                className="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold h-14 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-3 underline-offset-4"
+              >
+                <svg className="w-5 h-5" viewBox="0 0 24 24">
+                  <path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                  <path fill="currentColor" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                  <path fill="currentColor" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                  <path fill="currentColor" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                </svg>
+                Sign in with Google
+              </Button>
             </div>
 
             <p className="text-[10px] text-slate-400 font-medium pt-4">
-              Don't have an account? Simply sign in to create one. <br />
+              Don't have an account? Simply sign in with Google to create one. <br />
               By continuing, you agree to our terms of service.
             </p>
-            {/* Invisibile ReCaptcha container */}
-            <div id="recaptcha-container"></div>
           </div>
         </div>
       )}

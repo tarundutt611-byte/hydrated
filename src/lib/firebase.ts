@@ -1,16 +1,14 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, RecaptchaVerifier, signInWithPhoneNumber } from 'firebase/auth';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signOut } from 'firebase/auth';
 import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth();
-auth.useDeviceLanguage(); // Use browser language for ReCaptcha
+auth.useDeviceLanguage(); // Use browser language for Google login prompts if needed
 
 export const googleProvider = new GoogleAuthProvider();
-
-export { RecaptchaVerifier, signInWithPhoneNumber };
 
 export enum OperationType {
   CREATE = 'create',
@@ -59,26 +57,30 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   throw new Error(JSON.stringify(errInfo));
 }
 
-async function testConnection() {
+async function testConnection(isRetry = false) {
   try {
-    // Try to get a document from a test path or any path to check connection
-    // We use a timeout to avoid hanging if the network is really blocked or project invalid
     const docRef = doc(db, 'test', 'connection');
     await getDocFromServer(docRef);
     console.log("Firebase connection successful.");
   } catch (error: any) {
-    console.error("Firebase connection test failed:", error);
-    
     if (error.code === 'permission-denied') {
       console.log("Firestore connection confirmed (Permission Denied is expected if rules are locked).");
       return;
     }
 
     if (error.code === 'unavailable' || error.message?.includes('offline')) {
-      console.error("CRITICAL: Firestore is unreachable. Most likely, the database has not been created yet.");
-      console.error("Please go to Firebase Console > Firestore Database and click 'Create Database'.");
-      console.error("Ensure the Project ID matches: " + firebaseConfig.projectId);
+      if (!isRetry) {
+        console.log("Firestore connection pending... retrying in 5s");
+        setTimeout(() => testConnection(true), 5000);
+        return;
+      }
+      console.warn("Firestore status: OFFLINE or NOT PROVISIONED.");
+      console.info("TIP: If you haven't created your Firestore database yet, go to Firebase Console > Firestore Database and click 'Create Database'.");
+      console.info("Project ID: " + firebaseConfig.projectId);
+      return;
     }
+    
+    console.error("Firebase connection test failed:", error);
   }
 }
 testConnection();
