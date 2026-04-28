@@ -1,0 +1,36 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile and hydration stats",
+      "type": "object",
+      "properties": {
+        "totalPoints": { "type": "number" },
+        "dailyGoal": { "type": "number" },
+        "lastSyncedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["totalPoints", "dailyGoal"]
+    },
+    "WaterLog": {
+      "title": "WaterLog",
+      "description": "Individual water intake record",
+      "type": "object",
+      "properties": {
+        "amount": { "type": "number" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "type": { "type": "string" }
+      },
+      "required": ["amount", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Root user document"
+    },
+    "/users/{userId}/logs/{logId}": {
+      "schema": "WaterLog",
+      "description": "Subcollection of hydration entries"
+    }
+  }
+}
