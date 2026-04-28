@@ -121,13 +121,31 @@ export default function App() {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (u) => {
       setUser(u);
-      setAuthLoading(false);
+      setAuthLoading(false); // Auth check is done
       if (!u) {
         setStats(DEFAULT_STATS);
         setDataLoaded(false);
       }
+    }, (error) => {
+      console.error("Auth State Error:", error);
+      setAuthLoading(false);
+      toast.error("Authentication Service Error", { 
+        description: "Firebase Auth might be misconfigured or blocked. Check console." 
+      });
     });
-    return () => unsubscribe();
+    
+    // Safety timeout for auth loading
+    const timeout = setTimeout(() => {
+      if (authLoading) {
+        setAuthLoading(false);
+        console.warn("Auth check timed out.");
+      }
+    }, 8000);
+
+    return () => {
+      unsubscribe();
+      clearTimeout(timeout);
+    };
   }, []);
 
   const lastServerData = useRef<string>("");
